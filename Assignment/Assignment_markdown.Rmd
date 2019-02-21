@@ -1,0 +1,179 @@
+---
+title: "Practical Machine Learning Assigment"
+author: "Spiro Kolokithas"
+date: "20/02/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Assignment Context
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+The goal of the assignment is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. The prediction model will be used to predict the method of exercise.
+
+This assignment will use a number of models and perform final predictions with the model deemed to have the best accuracy.
+
+### Data and environment setup
+
+Data is sourced direct form the web location and downloaded. After reading the data we are looking at data quality (NA's and structure)
+
+```{r,echo=FALSE}
+library(caret)
+library(ggplot2)
+library(knitr)
+library(caret)
+library(rpart) 
+library(rpart.plot)
+library(rattle) 
+library(corrplot)
+library(randomForest)
+library(gbm)
+set.seed(12345)
+
+url_train <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url_test<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training<-read.csv(url_train, na.strings=c("", "NA", "NULL"))
+testing <- read.csv(url_test, na.strings=c("", "NA", "NULL"))
+str(training)
+dim(training)
+```
+
+We can see there are number of variables and also NA is prevalent which we will deal with in the course of the analysis.
+
+### Data Partition and Preparation
+
+
+
+```{r,echo=FALSE}
+inTrain  <- createDataPartition(training$classe, p=0.7, list=FALSE)
+TrainSet <- training[inTrain, ]
+TestSet  <- training[-inTrain, ]
+dim(TrainSet)
+dim(TestSet)
+```
+
+We have 13737, 160 items but we need to remove NA and Near Zero Values. NZV has been selected for this exercise and but other techniques could have also been used eg recoding
+
+```{r,echo=FALSE}
+NZV <- nearZeroVar(TrainSet)
+TrainSet <- TrainSet[, -NZV]
+TestSet  <- TestSet[, -NZV]
+dim(TrainSet)
+
+AllNA <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95 
+TrainSet <- TrainSet[, AllNA==FALSE]
+TestSet <- TestSet[, AllNA==FALSE]
+dim(TrainSet)
+```
+
+In addition there are number of variables which have been omitted eg id and time stamps as I have assumed they are not relevant for prediction.  
+
+```{r,echo=FALSE}
+TrainSet <- TrainSet[, -(1:5)]
+TestSet  <- TestSet[, -(1:5)]
+dim(TrainSet)
+```
+
+
+We have cleaned our data and are now ready to look for feature correlation via a correlation matrix:
+
+```{r,echo=FALSE}
+corMatrix <- cor(TrainSet[, -54])
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", tl.cex = 0.8, tl.col = rgb(0, 0, 0))
+
+```
+
+As the dark colors indicate (excluding the Principle Diagonal) some correlation does exist and as such Principal Component Analysis will be deployed as the final step in Preprocessing.
+
+```{r,echo=FALSE}
+preProc <- preProcess(TrainSet[, -54], method = "pca", thresh
+                      = 0.99)
+trainPC <- predict(preProc, TrainSet[, -54])
+valid_testPC <- predict(preProc, TestSet[, -54])
+```
+
+##Model Selection 
+
+We have have prepared and processed our data and its time to run a number of models and test their predicting power. The model will greatest accuracy will be selected
+
+### Random Forrest
+```{r,echo=FALSE}
+set.seed(12345)
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modFitRandForest <- train(classe ~ ., data=TrainSet, method="rf",trControl=controlRF)
+modFitRandForest$finalModel
+
+
+
+# prediction on Test dataset
+predictRandForest <- predict(modFitRandForest, newdata=TestSet)
+confMatRandForest <- confusionMatrix(predictRandForest, TestSet$classe)
+confMatRandForest
+```
+
+The model plot below shows accuracy equal to .9964.
+```{r,echo=FALSE}
+plot(confMatRandForest$table, col = confMatRandForest$byClass,
+     main = paste("Random Forest - Accuracy =",
+                  round(confMatRandForest$overall['Accuracy'], 4)))
+```
+
+### Decision Tree
+
+We now will run a decision tree
+
+```{r,echo=FALSE}
+set.seed(12345)
+modFitDecTree <- rpart(classe ~ ., data=TrainSet, method="class")
+fancyRpartPlot(modFitDecTree)
+
+
+# prediction on Test dataset
+predictDecTree <- predict(modFitDecTree, newdata=TestSet, type="class")
+confMatDecTree <- confusionMatrix(predictDecTree, TestSet$classe)
+confMatDecTree
+
+
+#plot matrix results
+
+plot(confMatDecTree$table, col = confMatDecTree$byClass,
+     main = paste("Decision Tree - Accuracy =",
+                  round(confMatDecTree$overall['Accuracy'], 4)))
+```
+
+Decision Tree accuracy is .7368 which is significantly less than Random Forrest so the assumption at this stage is we prefer Random Forrest. But the final model we will compare is a Generalized Boosted Model
+
+###Generalized Boosted Model
+
+```{r}
+# model fit
+set.seed(12345)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modFitGBM  <- train(classe ~ ., data=TrainSet, method = "gbm",
+                    trControl = controlGBM, verbose = FALSE)
+modFitGBM$finalModel
+## A gradient boosted model with multinomial loss function.
+## 150 iterations were performed.
+## There were 53 predictors of which 41 had non-zero influence.
+# prediction on Test dataset
+predictGBM <- predict(modFitGBM, newdata=TestSet)
+confMatGBM <- confusionMatrix(predictGBM, TestSet$classe)
+confMatGBM
+```
+
+The Generalized Boosted Model accuracy is .9857  which is higher than Decision Tree and but lower than Random Forrest. For the purposes of this analysis I have chosen Random Forrest and will now run model predictions:
+
+
+## Model Prediction
+
+Predicted results using Random Forrest are detailed below:
+
+```{r}
+predictTEST <- predict(modFitRandForest, newdata=testing)
+predictTEST
+```
+
